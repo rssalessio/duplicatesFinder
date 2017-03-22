@@ -1,4 +1,5 @@
 import collections
+from collections import deque
 import hashlib
 import multiprocessing as mp
 import os
@@ -42,52 +43,83 @@ def calculateHash(file_path):
 				hasher.update(buf)
 				buf = fl.read(BLOCKSIZE)
 	except IOError:
-		print 'Can\'t open ', file_path
+		size = 0
 	return hasher.hexdigest(), size
 
-def checkFiles(lock, files, root, duplicates_list) :
+def checkFiles(root, files, lock, dlist) :
 	bytes_processed = 0.0
-	for name in files :
-		if not name.startswith('.'):
-			full_path = os.path.join(root,name)
-			digest, size = calculateHash(full_path)
-			lock.acquire()
-			duplicates_list[digest].append(full_path)
-			lock.release()
-	#		bytes_processed += size/(1024 * 1024)
-	#print 'MB processed ', bytes_processed
+	if (len(files) > 0) :
+		for name in files :
+			if not name.startswith('.'):
+				full_path = os.path.join(root,name)
+				digest, size = calculateHash(full_path)
+				lock.acquire()
+				duplicates_list[digest].append(full_path)
+				lock.release()
+				bytes_processed += size/(1024 * 1024)
+	return bytes_processed
+
+def threadRoutine(end, lock, buf, dlist) :
+	bytes_processed = 0
+	while end.isSet() == False or len(buf) > 0 :
+		try:
+			if (len(buf) > 0):
+				data =  buf.pop()
+				if (len(data) > 0) :
+					root = data[0]
+					files  = data[1]
+					if (len(files) > 0):
+						bytes_processed += checkFiles(root, files, lock, dlist)
+		except IndexError:
+			continue
+		time.sleep(0.01)
+	print 'MB processed ', bytes_processed
 
 def main(argv,duplicates_list) :
 	start_time = time.time()
-	n_cpu = mp.cpu_count()*2
+	n_cpu = mp.cpu_count()
 	threads = []
 	parent_folder = argv[0]
 	lock = thread.Lock()
+	end = thread.Event()
+	bytes_processed = 0
+	print_step = 0
+
 	if (len(argv) > 1):
 		enable_threads = True
+		buf =  deque()
 	else:
 		enable_threads = False
+
+	if enable_threads :
+		for i in range(n_cpu):
+			t = thread.Thread(target=threadRoutine, args=(end, lock, buf, duplicates_list))
+			threads.append(t)
+			t.start()
+
 	for root, dirs, files in os.walk(parent_folder) :
+		if print_step % 100 == 0 :
+			print '\rProcessed ', bytes_processed, 'MB',
+			sys.stdout.flush()
 		for directory in dirs:
 			if directory.startswith('.'):
 				dirs.remove(directory)
-		for t in threads :
-			if (t.isAlive() == False):
-				threads.remove(t)
-		if (len(threads) <  n_cpu) and (len(files) > 0) and enable_threads == True:
-			t = thread.Thread(target=checkFiles, args=(lock, files, root, duplicates_list))
-			threads.append(t)
-			t.start()
-		elif len(files) > 0:
-			checkFiles(lock, files, root, duplicates_list)
-	print 'waiting all threads now'
+		if (enable_threads) and len(files)>0 : 
+			buf.appendleft([root,files])
+		elif enable_threads == False and len(files)>0 :
+			bytes_processed += checkFiles(root, files, lock, duplicates_list)
+		print_step += 1
+
+	end.set()
 	while len(threads) > 0 :
 		time.sleep(0.1)
 		for t in threads :
 				if (t.isAlive() == False):
 					threads.remove(t)
-	end_time = time.time()-start_time
-	print end_time
+	
+	print '\rMB processed ', bytes_processed
+	print 'Time elapsed: ', time.time()-start_time
+	print 'Average velocity [MB/Sec]: ', bytes_processed/(time.time()-start_time)
 	printDuplicates(duplicates_list)
 
 if __name__ == '__main__':
