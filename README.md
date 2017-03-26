@@ -4,7 +4,7 @@
 
 **Description**: Given a folder the app finds files of the same content across the subdirectories of that folder.
 
-**How to use**: Launch the application passing as argument the parent folder, e.g:
+**How to use**: Launch the application passing as argument the root folder, e.g:
 
 ```sh
 python listDuplicates.py ../
