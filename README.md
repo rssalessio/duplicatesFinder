@@ -1,12 +1,14 @@
 # duplicatesFinder
 
 **Author**: Alessio Russo (russo.alessio@outlook.com)
+
 **Description**: Given a folder the app finds files of the same content across the subdirectories of that folder.
+
 **How to use**: Launch the application passing as argument the parent folder, e.g:
 
-''sh
+```sh
 python listDuplicates.py ../
-''
+```
 
 Use the option -t to enable threading. 
 
@@ -14,6 +16,6 @@ Use the option -i __file__ to specify a file that includes a list of directories
 
 Example:
 
-''sh
+```sh
 python listduplicates.py ../../. -t -i ignoreDirectories.txt
-''
+```
