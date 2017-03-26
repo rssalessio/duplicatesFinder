@@ -1,3 +1,6 @@
+## listDuplicates
+## Author: Alessio Russo, russo.alessio@outlook.com
+
 import collections
 from collections import deque
 import hashlib
@@ -7,7 +10,27 @@ from sets import Set
 import sys
 import threading as thread
 import time
+import argparse
 
+
+class Args:
+	root_folder = None
+	enable_threading = False
+	ignored_directories = None
+	duplicates_list = None
+	thread_lock = None
+	thread_end = None
+
+parser = argparse.ArgumentParser(description='Python script to find files with the same content.')
+parser.add_argument('dir', help='Root direcory.')
+parser.add_argument("-i", "--ignore", metavar='I', help="Reads from I the list of directories that don't have to be processed")
+parser.add_argument("-t", "--threads", help="Enables threading.",
+                    action="store_true")
+
+bytes_processed = 0.0
+
+
+## Print files with same hash digest, ask the user which files he/she wants to delete
 def printDuplicates(duplicates_list):
 	it = 1
 	for digest in duplicates_list:
@@ -31,6 +54,7 @@ def printDuplicates(duplicates_list):
 				print('Removed.')
 		it = it + 1
 
+## Hash calculation
 def calculateHash(file_path):
 	BLOCKSIZE = 65536
 	size = 0
@@ -46,71 +70,90 @@ def calculateHash(file_path):
 		size = 0
 	return hasher.hexdigest(), size
 
-def checkFiles(root, files, lock, dlist) :
-	bytes_processed = 0.0
+
+## File analyzer
+def checkFiles(root, files, params) :
+	global bytes_processed
 	if (len(files) > 0) :
 		for name in files :
 			if not name.startswith('.'):
 				full_path = os.path.join(root,name)
 				digest, size = calculateHash(full_path)
-				lock.acquire()
-				duplicates_list[digest].append(full_path)
-				lock.release()
+				params.thread_lock.acquire()
+				params.duplicates_list[digest].append(full_path)
 				bytes_processed += size/(1024 * 1024)
-	return bytes_processed
+				params.thread_lock.release()
 
-def threadRoutine(end, lock, buf, dlist) :
-	bytes_processed = 0
-	while end.isSet() == False or len(buf) > 0 :
+## Thread routine
+def threadRoutine(params, buf):
+	while params.thread_end.isSet() == False or len(buf) > 0 :
 		try:
 			if (len(buf) > 0):
 				data =  buf.pop()
-				if (len(data) > 0) :
+				if (len(data) > 0):
 					root = data[0]
 					files  = data[1]
 					if (len(files) > 0):
-						bytes_processed += checkFiles(root, files, lock, dlist)
+						checkFiles(root, files, params)
+			else:
+				time.sleep(0.01)
 		except IndexError:
 			continue
-		time.sleep(0.01)
-	print 'MB processed ', bytes_processed
 
-def main(argv,duplicates_list) :
+## Print statistics function
+def printStats(params):
+	cycle_time =  time.time()
+	while params.thread_end.isSet() == False:
+		if  time.time()-cycle_time > 0.5:
+			print '\rProcessed ', bytes_processed, 'MB',
+			sys.stdout.flush()
+			cycle_time = time.time()
+		time.sleep(0.5)
+
+def main(params) :
 	start_time = time.time()
-	n_cpu = mp.cpu_count()
+	n_cpu = mp.cpu_count()*2
+
+	params.thread_lock = thread.Lock()
+	params.thread_end = thread.Event()
+
 	threads = []
-	parent_folder = argv[0]
-	lock = thread.Lock()
-	end = thread.Event()
-	bytes_processed = 0
-	print_step = 0
 
-	if (len(argv) > 1):
-		enable_threads = True
+	## Start threads
+	if params.enable_threading:
 		buf =  deque()
-	else:
-		enable_threads = False
-
-	if enable_threads :
 		for i in range(n_cpu):
-			t = thread.Thread(target=threadRoutine, args=(end, lock, buf, duplicates_list))
+			t = thread.Thread(target=threadRoutine, args=(params, buf))
 			threads.append(t)
 			t.start()
 
-	for root, dirs, files in os.walk(parent_folder) :
-		if print_step % 100 == 0 :
-			print '\rProcessed ', bytes_processed, 'MB',
-			sys.stdout.flush()
+	## Console output thread
+	t = thread.Thread(target=printStats, args=(params,))
+	threads.append(t)
+	t.start()
+
+	## Walk
+	for root, dirs, files in os.walk(params.root_foolder) :
 		for directory in dirs:
+			# Ignote temporary directories
 			if directory.startswith('.'):
 				dirs.remove(directory)
-		if (enable_threads) and len(files)>0 : 
+			# Ignore directories in the ignore file
+			if (params.ignored_directories != None):
+				temp = os.path.join(root, directory)
+				if temp in params.ignored_directories:
+					dirs.remove(directory)
+					params.ignored_directories.remove(temp)
+		# add work to threads
+		if (params.enable_threading) and len(files)>0 : 
 			buf.appendleft([root,files])
-		elif enable_threads == False and len(files)>0 :
-			bytes_processed += checkFiles(root, files, lock, duplicates_list)
-		print_step += 1
+		elif params.enable_threading == False and len(files)>0 :
+			checkFiles(root, files, params)
+		else:
+			time.sleep(0.01)
 
-	end.set()
+	#end all Threads
+	params.thread_end.set()
 	while len(threads) > 0 :
 		time.sleep(0.1)
 		for t in threads :
@@ -120,8 +163,31 @@ def main(argv,duplicates_list) :
 	print '\rMB processed ', bytes_processed
 	print 'Time elapsed: ', time.time()-start_time
 	print 'Average velocity [MB/Sec]: ', bytes_processed/(time.time()-start_time)
-	printDuplicates(duplicates_list)
+	printDuplicates(params.duplicates_list)
+
+def directoriesToIgnore(fileName):
+	directories = []
+	if (fileName != None) :
+		try:
+			with open(fileName,'r') as f:
+				directories = f.read().splitlines()
+		except IOError:
+			pass
+
+	if (fileName == None or len(directories) == 0):
+		return None
+	else:
+		return set(directories)
 
 if __name__ == '__main__':
-	duplicates_list = collections.defaultdict(list)
-	main(sys.argv[1:], duplicates_list)
+	## Parse arguments
+	args = parser.parse_args()
+	params = Args()
+
+	## Set parameters
+	#Set absolute path
+	params.root_foolder = os.path.abspath(args.dir)
+	params.ignored_directories = directoriesToIgnore(args.ignore)
+	params.enable_threading = args.threads
+	params.duplicates_list = collections.defaultdict(list)
+	main(params)
